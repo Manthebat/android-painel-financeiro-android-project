@@ -1,0 +1,82 @@
+name: Setup and Build Android
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Extract project files
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "=== Repo before extract ==="
+        ls -la
+        mkdir -p _extracted
+        unzip -o project.zip -d _extracted
+        echo "=== Extracted top-level ==="
+        ls -la _extracted
+        PROJECT_DIR=""
+        SETTINGS_FILE=$(find _extracted -maxdepth 6 \( -name settings.gradle -o -name settings.gradle.kts \) | head -n 1 || true)
+        if [ -n "$SETTINGS_FILE" ]; then
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+        fi
+        if [ -z "$PROJECT_DIR" ]; then
+          WRAPPER_FILE=$(find _extracted -maxdepth 6 -path "*/gradle/wrapper/gradle-wrapper.properties" | head -n 1 || true)
+          if [ -n "$WRAPPER_FILE" ]; then
+            PROJECT_DIR=$(dirname "$(dirname "$WRAPPER_FILE")")
+          fi
+        fi
+        if [ -z "$PROJECT_DIR" ]; then
+          echo "Could not locate a Gradle project root inside project.zip"
+          find _extracted -maxdepth 4 -type f | head -n 200
+          exit 1
+        fi
+        echo "=== Detected project dir: $PROJECT_DIR ==="
+        shopt -s dotglob
+        cp -R "$PROJECT_DIR"/* ./
+        shopt -u dotglob
+        rm -rf _extracted
+        rm -f project.zip
+        echo "=== Repo after extract ==="
+        ls -la
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: "17"
+        distribution: "temurin"
+
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v3
+
+    - name: Make gradlew executable
+      run: |
+        if [ -f gradlew ]; then chmod +x gradlew; fi
+
+    - name: Build Debug APK
+      run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+    - name: Upload Debug APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: Painel-Financeiro-debug-apk
+        path: app/build/outputs/apk/debug/*.apk
+
+    - name: Build Release APK (unsigned)
+      run: ./gradlew assembleRelease --no-daemon || echo "Release build skipped"
+      continue-on-error: true
+
+    - name: Upload Release APK
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: Painel-Financeiro-release-apk
+        path: app/build/outputs/apk/release/*.apk
+        if-no-files-found: ignore
